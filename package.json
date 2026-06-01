@@ -1,0 +1,65 @@
+{
+  "name": "universal-game-library",
+  "version": "1.1.0",
+  "description": "Universal Game Library Manager with real-time tracking",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .\"",
+    "build": "vite build && electron-builder",
+    "build:frontend": "vite build",
+    "dist": "rmdir /s /q dist 2>nul & rmdir /s /q dist_electron 2>nul & npm run build:frontend && electron-builder --windows",
+    "vite": "vite",
+    "electron": "electron .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.18",
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "electron": "^29.1.4",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.4.38",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.22.3",
+    "tailwindcss": "^3.4.1",
+    "vite": "^5.2.6",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.david.gamelibrarymanager",
+    "productName": "Universal Game Library",
+    "asar": true,
+    "directories": {
+      "output": "dist_electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "node_modules/**/*",
+      "package.json",
+      "!**/.cache/**",
+      "!**/DropZone/**",
+      "!**/*.map"
+    ],
+    "win": {
+      "target": "nsis",
+      "requestedExecutionLevel": "asInvoker",
+      "cscLink": null,
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "deleteAppDataOnUninstall": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Universal Game Library"
+    }
+  }
+}

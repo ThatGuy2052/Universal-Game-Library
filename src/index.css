@@ -1,0 +1,223 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand-bg: 220 25% 7%;
+  --brand-surface: 217 24% 11%;
+  --brand-card: 222 28% 15%;
+  --brand-border: 216 13% 21%;
+  --brand-accent: 216 84% 53%;
+  --brand-hover: 213 97% 61%;
+  --brand-text: 210 33% 92%;
+  --brand-muted: 214 11% 58%;
+  --brand-green: 129 50% 49%;
+  --brand-red: 3 92% 63%;
+  --brand-gold: 40 72% 48%;
+}
+
+:root[data-app-theme='default-slate'] {
+  --brand-bg: 220 25% 7%;
+  --brand-surface: 217 24% 11%;
+  --brand-card: 222 28% 15%;
+  --brand-border: 216 13% 21%;
+  --brand-accent: 216 84% 53%;
+  --brand-hover: 213 97% 61%;
+  --brand-text: 210 33% 92%;
+  --brand-muted: 214 11% 58%;
+}
+
+:root[data-app-theme='cyberpunk-neon'] {
+  --brand-bg: 213 35% 6%;
+  --brand-surface: 221 34% 10%;
+  --brand-card: 224 35% 14%;
+  --brand-border: 191 70% 30%;
+  --brand-accent: 185 95% 50%;
+  --brand-hover: 170 100% 55%;
+  --brand-text: 186 30% 94%;
+  --brand-muted: 198 18% 68%;
+}
+
+:root[data-app-theme='midnight-purple'] {
+  --brand-bg: 250 30% 8%;
+  --brand-surface: 255 26% 12%;
+  --brand-card: 260 26% 17%;
+  --brand-border: 265 19% 30%;
+  --brand-accent: 282 71% 58%;
+  --brand-hover: 292 81% 66%;
+  --brand-text: 262 28% 95%;
+  --brand-muted: 260 16% 72%;
+}
+
+:root[data-app-theme='emerald-forest'] {
+  --brand-bg: 154 28% 9%;
+  --brand-surface: 152 26% 13%;
+  --brand-card: 149 29% 17%;
+  --brand-border: 149 16% 30%;
+  --brand-accent: 152 66% 44%;
+  --brand-hover: 154 70% 50%;
+  --brand-text: 146 28% 93%;
+  --brand-muted: 148 15% 70%;
+}
+
+@layer base {
+  html, body, #root {
+    @apply h-full bg-brand-bg text-brand-text font-sans;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-brand-border rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-brand-muted;
+  }
+}
+
+@layer utilities {
+  .drag-region {
+    -webkit-app-region: drag;
+  }
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+}
+
+:root[data-app-theme='neo-minimal'],
+:root[data-theme='neo-minimal'] {
+  --brand-bg: 220 20% 97%;
+  --brand-surface: 0 0% 100%;
+  --brand-card: 0 0% 100%;
+  --brand-border: 220 14% 86%;
+  --brand-accent: 244 75% 59%;
+  --brand-hover: 244 75% 52%;
+  --brand-text: 220 39% 11%;
+  --brand-muted: 220 14% 42%;
+  --brand-green: 146 64% 38%;
+  --brand-red: 0 76% 57%;
+  --brand-gold: 40 72% 48%;
+  --theme-radius: 16px;
+}
+
+:root[data-app-theme='cyberpunk-neon'],
+:root[data-theme='cyberpunk-neon'] {
+  --brand-bg: 225 39% 7%;
+  --brand-surface: 226 36% 13%;
+  --brand-card: 225 33% 16%;
+  --brand-border: 190 100% 45%;
+  --brand-accent: 186 100% 50%;
+  --brand-hover: 312 100% 58%;
+  --brand-text: 190 100% 92%;
+  --brand-muted: 225 18% 72%;
+  --brand-green: 186 100% 50%;
+  --brand-red: 312 100% 58%;
+  --brand-gold: 40 90% 50%;
+}
+
+:root[data-app-theme='earthy-organic'],
+:root[data-theme='earthy-organic'] {
+  --brand-bg: 35 35% 85%;
+  --brand-surface: 34 45% 96%;
+  --brand-card: 34 40% 93%;
+  --brand-border: 28 28% 66%;
+  --brand-accent: 128 28% 29%;
+  --brand-hover: 128 28% 24%;
+  --brand-text: 120 15% 17%;
+  --brand-muted: 24 18% 40%;
+  --brand-green: 128 28% 29%;
+  --brand-red: 18 49% 58%;
+  --brand-gold: 32 66% 55%;
+}
+
+:root[data-app-theme='retro-terminal'],
+:root[data-theme='retro-terminal'] {
+  --brand-bg: 0 0% 5%;
+  --brand-surface: 0 0% 10%;
+  --brand-card: 0 0% 12%;
+  --brand-border: 126 100% 34%;
+  --brand-accent: 132 100% 60%;
+  --brand-hover: 40 100% 50%;
+  --brand-text: 132 100% 75%;
+  --brand-muted: 45 100% 64%;
+  --brand-green: 132 100% 60%;
+  --brand-red: 40 100% 50%;
+  --brand-gold: 40 100% 50%;
+}
+
+:root[data-app-theme='playful-gradient'],
+:root[data-theme='playful-gradient'] {
+  --brand-bg: 356 100% 71%;
+  --brand-surface: 45 100% 71%;
+  --brand-card: 166 92% 54%;
+  --brand-border: 251 100% 85%;
+  --brand-accent: 166 92% 44%;
+  --brand-hover: 251 100% 85%;
+  --brand-text: 230 30% 18%;
+  --brand-muted: 244 20% 36%;
+  --brand-green: 166 92% 44%;
+  --brand-red: 356 100% 62%;
+  --brand-gold: 45 100% 57%;
+  --theme-radius: 18px;
+}
+
+:root[data-app-theme='luxury-dark'],
+:root[data-theme='luxury-dark'] {
+  --brand-bg: 0 0% 4%;
+  --brand-surface: 0 0% 10%;
+  --brand-card: 0 0% 12%;
+  --brand-border: 45 24% 28%;
+  --brand-accent: 44 65% 52%;
+  --brand-hover: 44 72% 60%;
+  --brand-text: 0 0% 96%;
+  --brand-muted: 45 18% 75%;
+  --brand-green: 138 33% 45%;
+  --brand-red: 0 66% 58%;
+  --brand-gold: 44 65% 52%;
+}
+
+:root[data-app-theme='light-slate'],
+:root[data-theme='light-slate'] {
+  --brand-bg: 210 20% 97%;
+  --brand-surface: 210 24% 100%;
+  --brand-card: 214 26% 98%;
+  --brand-border: 216 15% 82%;
+  --brand-accent: 216 84% 53%;
+  --brand-hover: 213 88% 46%;
+  --brand-text: 220 25% 18%;
+  --brand-muted: 217 12% 42%;
+  --brand-green: 129 50% 38%;
+  --brand-red: 3 72% 50%;
+  --brand-gold: 40 72% 44%;
+}
+
+:root[data-app-theme='retro-terminal'] body,
+:root[data-theme='retro-terminal'] body {
+  font-family: Consolas, 'Courier New', monospace;
+}
+
+:root[data-app-theme='luxury-dark'] .border-brand-border,
+:root[data-theme='luxury-dark'] .border-brand-border {
+  border-width: 1px;
+}
+
+:root[data-app-theme='neo-minimal'] .rounded-xl,
+:root[data-theme='neo-minimal'] .rounded-xl,
+:root[data-app-theme='neo-minimal'] .rounded-lg,
+:root[data-theme='neo-minimal'] .rounded-lg {
+  border-radius: 16px;
+}
+
+:root[data-app-theme='playful-gradient'] body,
+:root[data-theme='playful-gradient'] body {
+  background-image: linear-gradient(135deg, #ff6b6b 0%, #ffd166 35%, #06d6a0 70%, #bdb2ff 100%);
+}
