@@ -1,6 +1,71 @@
 # Universal Game Library
 
-> A lightweight, automated application manager for tracking your complete gaming footprint — across custom desktop shortcuts and major retail platforms — from a single unified dashboard.
+A simple desktop app to track all your PC games in one place — whether they came from Steam or are custom shortcuts you added yourself.
+
+---
+
+## Features
+
+**Steam Integration**
+Automatically finds and lists all of your installed Steam games. No setup required.
+
+**Drag & Drop**
+Have a game that isn't on Steam? Just drag its shortcut into the app and it gets added instantly.
+
+**Storage Tracker**
+See exactly how much drive space each game is using, right on the game card.
+
+**Clean Dashboard**
+A simple grid layout with clear **STEAM** and **CUSTOM** tags so you always know where each game came from.
+
+**Easy Updates**
+Installing a new version takes one click. Your saved games, settings, and playtime data are never affected.
+
+---
+
+## Built With
+
+- [Electron](https://www.electronjs.org/) — desktop app shell
+- [React](https://react.dev/) — UI
+- [Vite](https://vitejs.dev/) — build tooling
+- [Tailwind CSS](https://tailwindcss.com/) — styling
+
+---
+
+## Getting Started
+
+**1. Clone the repo and install dependencies**
+
+```bash
+git clone https://github.com/your-username/universal-game-library.git
+cd universal-game-library
+npm install
+```
+
+**2. Run the app in development mode**
+
+```bash
+npm run dev
+```
+
+**3. Build the Windows installer**
+
+```bash
+npm run dist
+```
+
+The installer will be saved to the `dist_electron/` folder.
+
+---
+
+## Your Data
+
+Everything is stored locally on your machine in `%APPDATA%/GameLibraryManager/`. Nothing is sent anywhere.
+
+---
+
+**Version 1.1.0**
+
 
 ---
 
