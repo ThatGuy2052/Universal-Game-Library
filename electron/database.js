@@ -20,8 +20,14 @@ const { app } = require('electron')
 let dbPath = null
 let data   = null
 
+function isSizeTimeout(value) {
+  return String(value ?? '').trim().toUpperCase() === 'TIMEOUT'
+}
+
 function normalizeSizeGb(value, fallback = 0) {
+  if (isSizeTimeout(value)) return 'TIMEOUT'
   const numeric = Number(value)
+  if (isSizeTimeout(fallback)) return 'TIMEOUT'
   if (!Number.isFinite(numeric) || numeric < 0) return fallback
   return Math.round(numeric * 100) / 100
 }
@@ -109,9 +115,12 @@ function init() {
   // Ensure every game has a tags array
   for (const g of data.games) {
     if (!Array.isArray(g.tags)) { g.tags = []; needsPersist = true }
+    if (g.icon === undefined) { g.icon = null; needsPersist = true }
     if (g.exe_icon === undefined) { g.exe_icon = null; needsPersist = true }
     if (g.updated_at === undefined) { g.updated_at = g.created_at ?? Math.floor(Date.now() / 1000); needsPersist = true }
     if (g.launch_steam_with_game === undefined) { g.launch_steam_with_game = false; needsPersist = true }
+    if (g.isPinned === undefined) { g.isPinned = false; needsPersist = true }
+    if (g.epic_appname === undefined) { g.epic_appname = null; needsPersist = true }
 
     const inferredSizeGb =
       g.size ??
@@ -194,13 +203,16 @@ function addGame(game) {
     platform:       String(game.platform ?? 'custom').toLowerCase(),
     cover_url:      game.cover_url      ?? null,
     cover_local:    game.cover_local    ?? null,
+    icon:           game.icon           ?? null,
     exe_icon:       game.exe_icon       ?? null,
     install_status: game.install_status ?? 'installed',
     steam_appid:    game.steam_appid    ?? null,
+    epic_appname:   game.epic_appname   ?? null,
     conflict_exes:  Array.isArray(game.conflict_exes) ? game.conflict_exes : [],
     source_dir:     game.source_dir     ?? null,
     tags:           Array.isArray(game.tags) ? game.tags : [],
     launch_steam_with_game: !!game.launch_steam_with_game,
+    isPinned:       !!game.isPinned,
     size:           normalizeSizeGb(inferredSizeGb, 0),
     created_at:     Math.floor(Date.now() / 1000),
     updated_at:     Math.floor(Date.now() / 1000),
@@ -213,8 +225,8 @@ function addGame(game) {
 function updateGame(id, fields) {
   const ALLOWED = [
     'title', 'exe_path', 'total_playtime', 'last_played',
-    'platform', 'cover_url', 'cover_local', 'exe_icon', 'install_status', 'steam_appid',
-    'conflict_exes', 'source_dir', 'tags', 'updated_at', 'launch_steam_with_game', 'size',
+    'platform', 'cover_url', 'cover_local', 'icon', 'exe_icon', 'install_status', 'steam_appid', 'epic_appname',
+    'conflict_exes', 'source_dir', 'tags', 'updated_at', 'launch_steam_with_game', 'isPinned', 'size',
   ]
   const idx = data.games.findIndex(g => g.id === id)
   if (idx === -1) return null
@@ -223,6 +235,10 @@ function updateGame(id, fields) {
     if (!ALLOWED.includes(k)) continue
     if (k === 'size') {
       data.games[idx][k] = normalizeSizeGb(v, data.games[idx].size ?? 0)
+      continue
+    }
+    if (k === 'isPinned') {
+      data.games[idx][k] = !!v
       continue
     }
     data.games[idx][k] = v

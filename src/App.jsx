@@ -10,6 +10,15 @@ import CategoryView   from './pages/CategoryView'
 import Settings       from './pages/Settings'
 import { applyThemeSelection, DEFAULT_THEME, normalizeCustomTheme } from './themeEngine'
 
+function normalizePlatformValue(raw) {
+  const value = String(raw ?? '').trim().toLowerCase()
+  if (!value) return 'custom'
+  if (value === 'steam' || value === 'epic' || value === 'custom' || value === 'all') return value
+  if (value === 'manually added' || value === 'manual' || value === 'manual-added' || value === 'manually-added') return 'custom'
+  if (value === 'epic games') return 'epic'
+  return value
+}
+
 export default function App() {
   const [games,       setGames]       = useState([])
   const [categories,  setCategories]  = useState([])
@@ -39,11 +48,20 @@ export default function App() {
     let mounted = true
     ;(async () => {
       try {
-        await window.api.invoke('steam:scan')
+        const payload = await window.api.invoke('library:loadAll')
+        if (!mounted) return
+
+        const gamesData = Array.isArray(payload?.games) ? payload.games : []
+        const catsData = Array.isArray(payload?.categories) ? payload.categories : []
+        setGames(gamesData)
+        setCategories(catsData)
       } catch {
-        // Steam can be missing on some systems; load local library regardless.
+        await Promise.allSettled([
+          window.api.invoke('steam:scan'),
+          window.api.invoke('epic:scan'),
+        ])
+        if (mounted) await refreshGames()
       }
-      if (mounted) await refreshGames()
     })()
     return () => { mounted = false }
   }, [refreshGames])
@@ -142,6 +160,12 @@ export default function App() {
       await window.api.invoke('game:delete', id)
       setGames(prev => prev.filter(g => g.id !== id))
     },
+    onTogglePin: async (id, nextPinned) => {
+      const updated = await window.api.invoke('games:update', id, { isPinned: !!nextPinned })
+      if (updated?.id !== undefined) {
+        setGames(prev => prev.map(g => g.id === updated.id ? updated : g))
+      }
+    },
   }
 
   return (
@@ -196,6 +220,7 @@ function LibraryContent({
       return { type: 'category', id: String(id) }
     }
     if (path === '/steam') return { type: 'platform', value: 'steam' }
+    if (path === '/epic') return { type: 'platform', value: 'epic' }
     if (path === '/custom') return { type: 'platform', value: 'custom' }
     return { type: 'all' }
   }, [location.pathname])
@@ -242,22 +267,28 @@ function LibraryContent({
       return 0
     }
 
-    const q = searchQuery.toLowerCase()
-    let list = sharedProps.games.filter(game =>
-      game.title.toLowerCase().includes(q)
-    )
+    const q = String(searchQuery ?? '').toLowerCase()
+    const sourceGames = Array.isArray(sharedProps.games) ? sharedProps.games : []
+    let list = sourceGames.filter((game) => {
+      const title = String(game?.title ?? '').toLowerCase()
+      return title.includes(q)
+    })
+
+    const isAllGamesSidebar = sidebarFilter.type === 'all'
+    const normalizedSidebarPlatform = normalizePlatformValue(sidebarFilter.value)
+    const normalizedSearchPlatform = normalizePlatformValue(platform)
 
     if (sidebarFilter.type === 'category') {
       list = list.filter(g => Array.isArray(g.tags) && g.tags.includes(sidebarFilter.id))
-    } else if (sidebarFilter.type === 'platform') {
-      list = list.filter(g => String(g.platform ?? '').toLowerCase() === sidebarFilter.value)
+    } else if (!isAllGamesSidebar && sidebarFilter.type === 'platform') {
+      list = list.filter(g => normalizePlatformValue(g.platform) === normalizedSidebarPlatform)
     }
 
-    if (platform !== 'all') {
-      list = list.filter(g => String(g.platform ?? '').toLowerCase() === platform)
+    if (normalizedSearchPlatform !== 'all') {
+      list = list.filter(g => normalizePlatformValue(g.platform) === normalizedSearchPlatform)
     }
 
-    return [...list].sort((a, b) => {
+    const sortGames = (items) => [...items].sort((a, b) => {
       const rawSortBy = sortBy ?? 'title'
       const sortKey = String(rawSortBy).trim().toLowerCase()
       
@@ -319,7 +350,16 @@ function LibraryContent({
           // Default to A-Z (title)
           return a.title.localeCompare(b.title)
       }
-    }).map(game => ({
+    })
+
+    const pinnedGames = []
+    const unpinnedGames = []
+    for (const game of list) {
+      if (game.isPinned === true) pinnedGames.push(game)
+      else unpinnedGames.push(game)
+    }
+
+    return [...sortGames(pinnedGames), ...sortGames(unpinnedGames)].map(game => ({
       ...game,
       display_playtime: getLiveTotalPlaytime(game),
     }))
@@ -362,6 +402,7 @@ function LibraryContent({
                 <Route path="/" element={<Navigate to="/all" replace />} />
                 <Route path="/all"          element={<AllGames {...viewProps} label="All Games" />} />
                 <Route path="/steam"        element={<AllGames {...viewProps} label="Steam Games" />} />
+                <Route path="/epic"         element={<AllGames {...viewProps} label="Epic Games" />} />
                 <Route path="/custom"       element={<AllGames {...viewProps} label="Manually Added" />} />
                 <Route path="/category/:id" element={<CategoryView {...viewProps} />} />
                 <Route path="/settings"     element={<Settings />} />

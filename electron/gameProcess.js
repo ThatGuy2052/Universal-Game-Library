@@ -11,6 +11,7 @@ let mainWindow = null
 const STEAM_POLL_MS = 7000
 const STEAM_BOOT_TIMEOUT_MS = 25000
 const STEAM_GAME_START_TIMEOUT_MS = 120000
+const EPIC_GAME_START_TIMEOUT_MS = 120000
 
 /** Map<gameId, { process?, startTime?, interval?, launchedAt?, steamNeedles? }> */
 const running = new Map()
@@ -69,7 +70,8 @@ async function launch(id) {
   if (!game) return { success: false, error: 'Game not found' }
 
   const isSteamGame = String(game.platform ?? '').toLowerCase() === 'steam' || !!game.steam_appid
-  if (!isSteamGame && !game.exe_path) return { success: false, error: 'No executable path set' }
+  const isEpicGame = String(game.platform ?? '').toLowerCase() === 'epic' || !!game.epic_appname
+  if (!isSteamGame && !isEpicGame && !game.exe_path) return { success: false, error: 'No executable path set' }
 
   if (isSteamGame) {
     const appId = String(game.steam_appid ?? '').trim()
@@ -79,6 +81,19 @@ async function launch(id) {
       await ensureSteamClientRunning()
       await launchSteamUrl(appId)
       startSteamTracking(id, game)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: err.message }
+    }
+  }
+
+  if (isEpicGame) {
+    const appName = String(game.epic_appname ?? '').trim()
+    if (!appName) return { success: false, error: 'Missing Epic AppName' }
+
+    try {
+      await launchEpicUrl(appName)
+      startEpicTracking(id, game)
       return { success: true }
     } catch (err) {
       return { success: false, error: err.message }
@@ -290,6 +305,19 @@ async function launchSteamMain() {
   await execAsync(`xdg-open "${url}"`)
 }
 
+async function launchEpicUrl(appName) {
+  const url = `com.epicgames.launcher://apps/${encodeURIComponent(appName)}?action=launch&silent=true`
+  if (process.platform === 'win32') {
+    await execAsync(`cmd /c start "" "${url}"`)
+    return
+  }
+  if (process.platform === 'darwin') {
+    await execAsync(`open "${url}"`)
+    return
+  }
+  await execAsync(`xdg-open "${url}"`)
+}
+
 async function killProcessTree(pid) {
   if (process.platform === 'win32') {
     await execAsync(`taskkill /PID ${pid} /T /F`)
@@ -404,6 +432,79 @@ function startSteamTracking(id, game) {
   }, STEAM_POLL_MS)
 
   // Kick once immediately so fast launches are detected without waiting 7s.
+  poll().catch(() => { /* keep polling on transient failures */ })
+}
+
+function getEpicNeedles(game) {
+  const needles = new Set()
+
+  if (game.exe_path) {
+    const exeStem = path.basename(game.exe_path, path.extname(game.exe_path))
+    if (exeStem) needles.add(exeStem.toLowerCase())
+  }
+
+  if (game.epic_appname) {
+    needles.add(String(game.epic_appname).toLowerCase().replace(/[^a-z0-9]+/g, ''))
+  }
+
+  if (game.title) {
+    const titleStem = game.title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '')
+      .trim()
+    if (titleStem) needles.add(titleStem)
+  }
+
+  needles.delete('epicgameslauncher')
+  needles.delete('epicgameslauncher.exe')
+  needles.delete('epicwebhelper')
+  needles.delete('epicwebhelper.exe')
+
+  return Array.from(needles)
+    .map(n => n.toLowerCase().replace(/[^a-z0-9]+/g, ''))
+    .filter(Boolean)
+}
+
+function startEpicTracking(id, game) {
+  const state = {
+    startTime: null,
+    launchedAt: Date.now(),
+    steamNeedles: getEpicNeedles(game),
+    interval: null,
+  }
+  running.set(id, state)
+
+  const poll = async () => {
+    const current = running.get(id)
+    if (!current) return
+
+    const names = await getActiveProcessNames()
+    const detectedName = findSteamProcessName(names, current.steamNeedles)
+
+    if (detectedName) {
+      if (!current.startTime) {
+        current.startTime = Date.now()
+        mainWindow?.webContents.send('game:launched', { id })
+      }
+      current.activeProcessName = detectedName
+      running.set(id, current)
+      return
+    }
+
+    if (!current.startTime) {
+      if (Date.now() - current.launchedAt > EPIC_GAME_START_TIMEOUT_MS) {
+        cleanup(id, null)
+      }
+      return
+    }
+
+    cleanup(id, current.startTime)
+  }
+
+  state.interval = setInterval(() => {
+    poll().catch(() => { /* keep polling on transient failures */ })
+  }, STEAM_POLL_MS)
+
   poll().catch(() => { /* keep polling on transient failures */ })
 }
 

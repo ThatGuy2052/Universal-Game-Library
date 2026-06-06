@@ -4,7 +4,7 @@ import GameListRow from '../components/GameListRow'
 /**
  * AllGames — renders the already processed list from App.jsx.
  */
-export default function AllGames({ games, categories, runningIds, onLaunch, onStop, onDelete, onOpenConflict, onGameUpdated, viewMode = 'grid', sortBy, label = 'All Games' }) {
+export default function AllGames({ games, categories, runningIds, onLaunch, onStop, onDelete, onOpenConflict, onGameUpdated, onTogglePin, viewMode = 'grid', sortBy, label = 'All Games' }) {
   const filteredGames = games
 
   const handleDelete = onDelete
@@ -35,6 +35,9 @@ export default function AllGames({ games, categories, runningIds, onLaunch, onSt
               onStop={onStop}
               onDelete={handleDelete}
               onOpenConflict={onOpenConflict}
+              categories={categories}
+              onGameUpdated={onGameUpdated}
+              onTogglePin={onTogglePin}
             />
           ))}
         </div>
@@ -51,6 +54,7 @@ export default function AllGames({ games, categories, runningIds, onLaunch, onSt
               onOpenConflict={onOpenConflict}
               categories={categories}
               onGameUpdated={onGameUpdated}
+              onTogglePin={onTogglePin}
               sortBy={sortBy}
             />
           ))}

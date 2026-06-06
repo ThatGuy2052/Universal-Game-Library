@@ -90,6 +90,92 @@ function getSteamSizeOnDiskBytes(appIdInput) {
   return null
 }
 
+function resolveSteamCachedIconPath(steamRoot, appIdInput, acf = null) {
+  if (!steamRoot) return null
+  const appId = String(appIdInput ?? '').trim()
+  if (!appId) return null
+
+  const iconHash = String(acf?.clienticon ?? acf?.icon ?? '').trim()
+  if (process.platform === 'win32' && iconHash) {
+    const steamIconPath = path.win32.join('C:', 'Program Files (x86)', 'Steam', 'steam', 'games', `${iconHash}.ico`)
+    if (fs.existsSync(steamIconPath)) return path.win32.normalize(steamIconPath)
+  }
+
+  const iconDirs = [
+    path.join(steamRoot, 'steam', 'games'),
+    path.join(steamRoot, 'games'),
+  ]
+
+  for (const iconDir of iconDirs) {
+    if (!fs.existsSync(iconDir)) continue
+
+    if (iconHash) {
+      const hashedIcoPath = path.join(iconDir, `${iconHash}.ico`)
+      if (fs.existsSync(hashedIcoPath)) return path.normalize(hashedIcoPath)
+    }
+
+    const appIdIcoPath = path.join(iconDir, `${appId}.ico`)
+    if (fs.existsSync(appIdIcoPath)) return path.normalize(appIdIcoPath)
+
+    try {
+      const icoCandidate = fs.readdirSync(iconDir)
+        .find((entry) => entry.toLowerCase().endsWith('.ico') && entry.includes(appId))
+      if (icoCandidate) return path.normalize(path.join(iconDir, icoCandidate))
+    } catch {
+      // Best effort lookup only.
+    }
+  }
+
+  return null
+}
+
+function collectExeCandidates(dirPath, depth = 2) {
+  const results = []
+  if (!dirPath || depth < 0 || !fs.existsSync(dirPath)) return results
+
+  let entries = []
+  try {
+    entries = fs.readdirSync(dirPath, { withFileTypes: true })
+  } catch {
+    return results
+  }
+
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name)
+    if (entry.isFile() && entry.name.toLowerCase().endsWith('.exe')) {
+      results.push(fullPath)
+      continue
+    }
+    if (entry.isDirectory() && depth > 0) {
+      results.push(...collectExeCandidates(fullPath, depth - 1))
+    }
+  }
+
+  return results
+}
+
+function resolveSteamExecutablePath(libPath, acf) {
+  const installDir = String(acf?.installdir ?? acf?.name ?? '').trim()
+  if (!installDir) return null
+
+  const exeBasePath = path.join(libPath, 'common', installDir)
+  if (!fs.existsSync(exeBasePath)) return null
+
+  const exeCandidates = collectExeCandidates(exeBasePath, 2)
+  if (exeCandidates.length === 0) return null
+
+  const preferredNames = [installDir, acf?.name, acf?.launcherpath]
+    .filter(Boolean)
+    .map(value => String(value).trim().toLowerCase())
+
+  const preferred = exeCandidates.find((candidate) => {
+    const candidateName = path.basename(candidate, path.extname(candidate)).toLowerCase()
+    return preferredNames.some((name) => candidateName === name || candidateName.includes(name) || name.includes(candidateName))
+  })
+
+  return path.normalize(preferred ?? exeCandidates[0])
+}
+
 // ── Main scan function ───────────────────────────────────────────────────────
 function scan() {
   const games = []
@@ -112,15 +198,16 @@ function scan() {
         const appid  = acf['appid']
         const name   = acf['name']
         if (!appid || !name) continue
+        const steamCachedIconPath = resolveSteamCachedIconPath(root, appid, acf)
 
-        // Construct standard exe path heuristic (Windows)
-        const installDir  = acf['installdir'] ?? name
-        const exeBasePath = path.join(libPath, 'common', installDir)
+        const exePath = resolveSteamExecutablePath(libPath, acf)
 
         games.push({
           steam_appid:    appid,
           title:          name,
-          exe_path:       exeBasePath,
+          exe_path:       exePath,
+          exe_icon:       steamCachedIconPath,
+          icon:           steamCachedIconPath,
           platform:       'steam',
           cover_url:      `https://cdn.akamai.steamstatic.com/steam/apps/${appid}/header.jpg`,
           install_status: 'installed',

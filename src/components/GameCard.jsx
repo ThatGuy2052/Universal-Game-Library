@@ -1,5 +1,15 @@
 import { useState, useRef, useEffect } from 'react'
 import ManageCategoriesModal from './ManageCategoriesModal'
+import { formatGameSize, getGameSizeGb } from '../utils/sizeFormat'
+
+function normalizePlatformValue(raw) {
+  const value = String(raw ?? '').trim().toLowerCase()
+  if (!value) return 'custom'
+  if (value === 'steam' || value === 'epic' || value === 'custom') return value
+  if (value === 'manually added' || value === 'manual' || value === 'manual-added' || value === 'manually-added') return 'custom'
+  if (value === 'epic games') return 'epic'
+  return value
+}
 
 function toTrackedSeconds(raw) {
   const value = Number(raw)
@@ -25,85 +35,38 @@ function formatDate(ts) {
   return new Date(ts * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-function formatSizeForBadge(sizeInBytes) {
-  const val = parseFloat(sizeInBytes) || 0
-  if (val <= 0) return '0 MB'
-  
-  // If value >= 1, assume it's already in GB (from getSizeValue in App.jsx)
-  if (val >= 1) {
-    return `${val.toFixed(1)} GB`
-  }
-  
-  // Otherwise, if it's a very large number, assume it's in bytes
-  // (for compatibility with raw file sizes)
-  if (val > 1024) {
-    const gb = val / (1024 * 1024 * 1024)
-    if (gb >= 1) {
-      return `${gb.toFixed(1)} GB`
-    }
-    
-    const mb = val / (1024 * 1024)
-    if (mb >= 1) {
-      return `${Math.round(mb)} MB`
-    }
-    
-    const kb = val / 1024
-    return `${Math.round(kb)} KB`
-  }
-  
-  // For small values (0 < val < 1) that aren't in bytes, assume they're fractional GB
-  return `${val.toFixed(1)} GB`
-}
-
-function getSizeValueForBadge(game) {
-  const rootSizeValue = parseFloat(game.size)
-  if (Number.isFinite(rootSizeValue) && rootSizeValue > 0) return rootSizeValue
-
-  const gbRaw =
-    game.size_gb ??
-    game.sizeGb ??
-    game.install_size ??
-    game.installSize ??
-    game.disk_size ??
-    game.diskSize ??
-    game.file_size ??
-    game.fileSize
-  const gbValue = parseFloat(gbRaw)
-  if (Number.isFinite(gbValue) && gbValue > 0) return gbValue
-
-  const bytesRaw =
-    game.size_on_disk ??
-    game.size_bytes ??
-    game.sizeBytes
-  const bytesValue = parseFloat(bytesRaw)
-  if (Number.isFinite(bytesValue) && bytesValue > 0) {
-    return bytesValue / (1024 * 1024 * 1024)
-  }
-
-  return 0
-}
-
-export default function GameCard({ game, isRunning, onLaunch, onStop, onDelete, onOpenConflict, categories = [], onGameUpdated, sortBy }) {
+export default function GameCard({ game, isRunning, onLaunch, onStop, onDelete, onOpenConflict, categories = [], onGameUpdated, onTogglePin, sortBy }) {
   const [ctxMenu,        setCtxMenu]        = useState(null)   // { x, y } | null
   const [showCatModal,   setShowCatModal]   = useState(false)
   const [savingSteamOpt, setSavingSteamOpt] = useState(false)
+  const [savingPin,      setSavingPin]      = useState(false)
   const [coverLoadFailed, setCoverLoadFailed] = useState(false)
+  const [hasShortcut,     setHasShortcut]     = useState(false)
   const ctxRef = useRef(null)
 
   const isPending = game.install_status === 'pending_resolution'
-  const isCustomGame = game.isCustom === true || String(game.platform ?? '').toLowerCase() === 'custom'
+  const platformLabel = normalizePlatformValue(game.platform)
+  const isCustomGame = game.isCustom === true || platformLabel === 'custom'
+  const isPinned = game.isPinned === true
   const launchSteamWithGame = !!(game.launch_steam_with_game ?? game.launchSteamWithGame)
-  const badgeSizeValue = getSizeValueForBadge(game)
+  const badgeSizeValue = getGameSizeGb(game)
   const shouldShowSizeBadge = (sortBy === 'size-desc' || sortBy === 'size-asc') && badgeSizeValue > 0
 
-  const rawCoverUrl = typeof game.coverUrl === 'string' ? game.coverUrl.trim() : ''
+  const rawCoverUrl =
+    typeof game.coverUrl === 'string' ? game.coverUrl.trim()
+      : (typeof game.cover_url === 'string' ? game.cover_url.trim() : '')
+  const rawGameIcon = typeof game.icon === 'string' ? game.icon.trim() : ''
+  const hasRenderableGameIcon = /^data:image\//i.test(rawGameIcon)
+  const safeCoverUrl = platformLabel === 'epic' && !/^https?:\/\//i.test(rawCoverUrl)
+    ? ''
+    : rawCoverUrl
   const isBrokenDefaultCoverPath =
-    rawCoverUrl === 'null' ||
-    rawCoverUrl === 'undefined' ||
-    rawCoverUrl === 'about:blank' ||
-    /(^|\/)default[-_ ]?cover(\.|\/|$)/i.test(rawCoverUrl) ||
-    /(^|\/)placeholder[-_ ]?cover(\.|\/|$)/i.test(rawCoverUrl)
-  const hasRenderableCover = rawCoverUrl.length > 0 && !isBrokenDefaultCoverPath
+    safeCoverUrl === 'null' ||
+    safeCoverUrl === 'undefined' ||
+    safeCoverUrl === 'about:blank' ||
+    /(^|\/)default[-_ ]?cover(\.|\/|$)/i.test(safeCoverUrl) ||
+    /(^|\/)placeholder[-_ ]?cover(\.|\/|$)/i.test(safeCoverUrl)
+  const hasRenderableCover = safeCoverUrl.length > 0 && !isBrokenDefaultCoverPath
 
   useEffect(() => {
     setCoverLoadFailed(false)
@@ -119,9 +82,27 @@ export default function GameCard({ game, isRunning, onLaunch, onStop, onDelete, 
     return () => document.removeEventListener('mousedown', handler)
   }, [ctxMenu])
 
+  // Refresh shortcut state whenever the context menu opens
+  useEffect(() => {
+    if (!ctxMenu) return
+    window.api.invoke('shortcut:exists', game.id)
+      .then(exists => setHasShortcut(!!exists))
+      .catch(() => setHasShortcut(false))
+  }, [ctxMenu, game.id])
+
   function handleContextMenu(e) {
     e.preventDefault()
     setCtxMenu({ x: e.clientX, y: e.clientY })
+  }
+
+  async function updatePinned(nextPinned) {
+    if (savingPin) return
+    setSavingPin(true)
+    try {
+      await onTogglePin?.(game.id, nextPinned)
+    } finally {
+      setSavingPin(false)
+    }
   }
 
   return (
@@ -138,13 +119,27 @@ export default function GameCard({ game, isRunning, onLaunch, onStop, onDelete, 
         <div className="relative h-36 bg-brand-surface overflow-hidden">
           {hasRenderableCover && !coverLoadFailed ? (
             <img
-              src={rawCoverUrl}
+              src={safeCoverUrl}
               alt={game.title}
               loading="lazy"
               decoding="async"
               onError={() => setCoverLoadFailed(true)}
               className="w-full h-full object-cover"
             />
+          ) : hasRenderableGameIcon ? (
+            <div className="w-full h-full bg-brand-bg/90 flex flex-col items-center justify-center px-3 text-center">
+              <img
+                src={rawGameIcon}
+                alt={game.title}
+                loading="lazy"
+                decoding="async"
+                onError={() => setCoverLoadFailed(true)}
+                className="w-16 h-16 object-contain mb-2 drop-shadow-[0_10px_20px_rgba(0,0,0,0.35)]"
+              />
+              <p className="text-xs font-semibold text-brand-muted truncate w-full" title={game.title}>
+                {game.title}
+              </p>
+            </div>
           ) : (
             <div className="w-full h-full bg-brand-bg/90 flex flex-col items-center justify-center px-3 text-center">
               <div className="text-4xl text-brand-border mb-1">{isPending ? '⚠️' : '🎮'}</div>
@@ -157,23 +152,43 @@ export default function GameCard({ game, isRunning, onLaunch, onStop, onDelete, 
           {/* Size Badge — only visible during size-based sort */}
           {shouldShowSizeBadge && (
             <div className="absolute top-2 left-2 bg-brand-surface/90 backdrop-blur-sm text-white text-[10px] font-bold uppercase px-2 py-1 rounded-lg border border-brand-border/50">
-              {formatSizeForBadge(badgeSizeValue)}
+              {formatGameSize(badgeSizeValue)}
             </div>
           )}
 
+          {isPinned && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                void updatePinned(false)
+              }}
+              className="absolute top-2 right-2 bg-brand-surface/90 backdrop-blur-sm text-brand-gold text-xs font-bold px-2 py-1 rounded-lg border border-brand-border/50 hover:bg-brand-card transition"
+              title="Unpin game"
+              disabled={savingPin}
+            >
+              📌
+            </button>
+          )}
+
           {isPending && (
-            <div className="absolute top-2 right-2 bg-brand-gold text-black text-[10px] font-bold uppercase px-2 py-0.5 rounded-full">
+            <div className={`absolute top-2 bg-brand-gold text-black text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${isPinned ? 'right-10' : 'right-2'}`}>
               Conflict
             </div>
           )}
           {isRunning && !isPending && (
-            <div className="absolute top-2 right-2 bg-brand-green text-white text-[10px] font-bold uppercase px-2 py-0.5 rounded-full">
+            <div className={`absolute top-2 bg-brand-green text-white text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${isPinned ? 'right-10' : 'right-2'}`}>
               Playing
             </div>
           )}
           <div className={`absolute bottom-2 left-2 text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full
-            ${game.platform === 'steam' ? 'bg-blue-600/80 text-white' : 'bg-brand-gold/80 text-black'}`}>
-            {game.platform}
+            ${platformLabel === 'steam'
+              ? 'bg-blue-600/80 text-white'
+              : platformLabel === 'epic'
+                ? 'bg-slate-800/90 text-white border border-slate-500/60'
+                : 'bg-brand-gold/80 text-black'}`}>
+            {platformLabel.toUpperCase()}
           </div>
         </div>
 
@@ -311,6 +326,33 @@ export default function GameCard({ game, isRunning, onLaunch, onStop, onDelete, 
               </span>
             </button>
           )}
+
+          <button
+            onClick={async () => {
+              setCtxMenu(null)
+              await updatePinned(!isPinned)
+            }}
+            className="w-full text-left flex items-center gap-2.5 px-4 py-2 text-sm text-brand-text hover:bg-brand-card transition disabled:opacity-60"
+            disabled={savingPin}
+          >
+            <span>{isPinned ? '📍' : '📌'}</span> {isPinned ? 'Unpin Game' : 'Pin Game'}
+          </button>
+
+          <button
+            onClick={async () => {
+              setCtxMenu(null)
+              if (hasShortcut) {
+                const r = await window.api.invoke('shortcut:remove', game.id)
+                if (!r?.success) alert(`Could not remove shortcut: ${r?.error}`)
+              } else {
+                const r = await window.api.invoke('shortcut:create', game.id)
+                if (!r?.success) alert(`Could not create shortcut: ${r?.error}`)
+              }
+            }}
+            className="w-full text-left flex items-center gap-2.5 px-4 py-2 text-sm text-brand-text hover:bg-brand-card transition"
+          >
+            <span>{hasShortcut ? '✂️' : '🔗'}</span> {hasShortcut ? 'Remove Desktop Shortcut' : 'Create Desktop Shortcut'}
+          </button>
 
           <div className="my-1 border-t border-brand-border" />
           <button

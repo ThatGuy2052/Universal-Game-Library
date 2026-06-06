@@ -51,6 +51,7 @@ const store = prefs
 const db            = require('./database')
 const fileWatcher   = require('./fileWatcher')
 const steamScanner  = require('./steamScanner')
+const epicScanner   = require('./epicScanner')
 const gameProcess   = require('./gameProcess')
 const exeIcon       = require('./exeIcon')
 
@@ -63,6 +64,54 @@ function bytesToGb(bytes) {
   const numeric = Number(bytes)
   if (!Number.isFinite(numeric) || numeric <= 0) return 0
   return Math.round((numeric / (1024 * 1024 * 1024)) * 100) / 100
+}
+
+async function extractNativeIcon(targetPath) {
+  try {
+    if (typeof targetPath !== 'string' || targetPath.trim().length === 0) return null
+    if (!fs.existsSync(targetPath)) return null
+    const normalizedPath = path.normalize(targetPath)
+    let targetStat = null
+    try {
+      targetStat = fs.statSync(normalizedPath)
+    } catch {
+      return null
+    }
+    if (!targetStat?.isFile?.()) return null
+    if (!/\.(exe|ico)$/i.test(normalizedPath)) return null
+    const nativeImg = await Promise.race([
+      app.getFileIcon(normalizedPath, { size: 'normal' }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 150)),
+    ])
+    if (!nativeImg || nativeImg.isEmpty()) return null
+    const pngBuffer = nativeImg.toPNG()
+    if (!pngBuffer || pngBuffer.length < 1500) {
+      console.warn(`[IconScanner] Rejected likely generic icon (${pngBuffer?.length ?? 0} bytes) for: ${targetPath}`)
+      return null
+    }
+    const dataUrl = nativeImg.toDataURL()
+    if (!/^data:image\//i.test(dataUrl)) return null
+    if (normalizedPath === path.normalize(process.execPath)) return null
+    return dataUrl
+  } catch (error) {
+    console.warn(`[IconScanner] Skipped slow icon extraction for: ${targetPath}`)
+    return null
+  }
+}
+
+async function resolveGameIconData(gameLike) {
+  const candidates = [
+    gameLike?.icon,
+    gameLike?.exe_path,
+    gameLike?.exe_icon,
+  ]
+
+  for (const candidate of candidates) {
+    const extracted = await extractNativeIcon(candidate)
+    if (extracted) return extracted
+  }
+
+  return null
 }
 
 function getSteamRootCandidates() {
@@ -484,7 +533,7 @@ async function runStartupSizeSweep(options = {}) {
   console.log(`[SizeScanner] Startup sweep complete. Updated: ${updated}/${games.length}. Force rescan: ${forceRescan}`)
 }
 
-function createWindow() {
+function createWindow(opts = {}) {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -492,6 +541,7 @@ function createWindow() {
     minHeight: 600,
     frame: false,
     backgroundColor: '#0e1117',
+    show: opts.show !== false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -549,6 +599,10 @@ function createWindow() {
   fileWatcher.setWindow(mainWindow)
 }
 
+// ── Parse CLI auto-launch argument ───────────────────────────────────────────
+const _autoLaunchRaw = process.argv.find(a => /^--launch-game-id=/.test(a))
+const autoLaunchGameId = _autoLaunchRaw ? Number(_autoLaunchRaw.replace('--launch-game-id=', '')) : null
+
 app.whenReady().then(async () => {
   try {
     protocol.registerFileProtocol('custom-cover', (request, callback) => {
@@ -595,7 +649,19 @@ app.whenReady().then(async () => {
 
     db.init()
     await flattenExistingCoverAssets()
-    createWindow()
+    createWindow({ show: autoLaunchGameId == null })
+    if (autoLaunchGameId != null) {
+      try {
+        const launchRes = await gameProcess.launch(autoLaunchGameId)
+        if (launchRes && !launchRes.success) {
+          console.error('[auto-launch] Launch failed:', launchRes.error)
+          mainWindow?.show()
+        }
+      } catch (err) {
+        console.error('[auto-launch] Exception:', err)
+        mainWindow?.show()
+      }
+    }
 
     // One-time migration-style force sweep to correct previously inflated values.
     const storedSizeScanRevision = Number(store.get('sizeScan:revision') ?? 0)
@@ -941,7 +1007,229 @@ async function convertCoverToStaticStill(sourcePath, gameId) {
 async function withResolvedCover(game) {
   if (!game) return game
   const coverUrl = game.cover_url || game.cover_local || null
-  return { ...game, cover_url: coverUrl, coverUrl }
+  const sanitizedIcon = (typeof game.icon === 'string' && /^data:image\//i.test(game.icon)) ? game.icon : null
+  return { ...game, cover_url: coverUrl, coverUrl, icon: sanitizedIcon }
+}
+
+async function resolveAllGamesForRenderer() {
+  try {
+    const games = db.getAllGames()
+    const settled = await Promise.allSettled(games.map(withResolvedCover))
+    return settled
+      .filter(result => result.status === 'fulfilled')
+      .map(result => result.value)
+      .filter(Boolean)
+  } catch (error) {
+    console.error('[library] Failed to resolve games for renderer:', error)
+    return []
+  }
+}
+
+async function getFolderSizeWithTimeout(dirPath, timeoutMs = 15000) {
+  return Promise.race([
+    getFolderSize(dirPath),
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`Size scan timeout after ${timeoutMs}ms`)), timeoutMs)
+    }),
+  ])
+}
+
+async function syncSteamLibrary() {
+  const scanned = steamScanner.scan()
+  const existingByAppId = new Map(
+    db.getAllGames()
+      .filter(g => g.steam_appid)
+      .map(g => [String(g.steam_appid), g])
+  )
+
+  const resolveSteamInfo = (appId, scannedGame, existingGame = null) => {
+    const isCs2 = String(appId) === '730'
+    const manifestInfo = getSteamManifestInfo(appId, { forceRefresh: isCs2 })
+
+    const parsedFromScan = Number(scannedGame?.size_on_disk)
+    const parsedFromScanGb = Number.isFinite(parsedFromScan) && parsedFromScan > 0
+      ? Number((parsedFromScan / (1024 * 1024 * 1024)).toFixed(2))
+      : 0
+
+    const manifestSizeGb = Number.isFinite(manifestInfo.sizeGb) && manifestInfo.sizeGb > 0
+      ? Number(manifestInfo.sizeGb.toFixed(2))
+      : 0
+
+    const existingSize = Number(existingGame?.size)
+    const existingSizeGb = Number.isFinite(existingSize) && existingSize > 0
+      ? Number(existingSize.toFixed(2))
+      : 0
+
+    const sizeGb = parsedFromScanGb || manifestSizeGb || existingSizeGb || 0
+    const exePath = manifestInfo.installDirPath || scannedGame?.exe_path || existingGame?.exe_path || null
+
+    return { sizeGb, exePath }
+  }
+
+  for (const sg of scanned) {
+    const appId = String(sg.steam_appid)
+    const existing = existingByAppId.get(appId)
+    const nativeIcon = await resolveGameIconData(sg)
+
+    if (existing) {
+      const resolved = resolveSteamInfo(appId, sg, existing)
+      db.updateGame(existing.id, {
+        title:          sg.title,
+        exe_path:       resolved.exePath,
+        icon:           nativeIcon ?? existing.icon ?? null,
+        exe_icon:       sg.exe_icon ?? existing.exe_icon ?? null,
+        platform:       'steam',
+        cover_url:      sg.cover_url,
+        install_status: sg.install_status,
+        steam_appid:    appId,
+        // Keep Steam and custom entries aligned on the same root size key.
+        size:           resolved.sizeGb,
+      })
+      continue
+    }
+
+    const resolved = resolveSteamInfo(appId, sg)
+    const added = db.addGame({
+      ...sg,
+      exe_path: resolved.exePath,
+      icon: nativeIcon,
+      exe_icon: sg.exe_icon ?? null,
+      platform: 'steam',
+      steam_appid: appId,
+      size: resolved.sizeGb,
+    })
+    existingByAppId.set(appId, added)
+  }
+
+  return scanned
+}
+
+async function syncEpicLibrary(options = {}) {
+  const awaitSizeScans = options.awaitSizeScans === true
+  const scanned = epicScanner.scan()
+
+  // Cleanup pass for legacy duplicate Epic rows before applying current scan results.
+  const seenEpicKeys = new Set()
+  for (const game of db.getAllGames()) {
+    const platform = String(game?.platform ?? '').toLowerCase()
+    const appKey = String(game?.epic_appname ?? '').trim().toLowerCase()
+    const dirKey = String(game?.source_dir ?? '').trim().toLowerCase()
+    const dedupeKey = `${appKey}::${dirKey}`
+    const isEpicRecord = platform === 'epic' || !!appKey
+    if (!isEpicRecord || (!appKey && !dirKey)) continue
+    if (seenEpicKeys.has(dedupeKey)) {
+      db.deleteGame(game.id)
+      continue
+    }
+    seenEpicKeys.add(dedupeKey)
+  }
+
+  const existingByAppName = new Map(
+    db.getAllGames()
+      .filter(g => g.epic_appname)
+      .map(g => [String(g.epic_appname).toLowerCase(), g])
+  )
+
+  const tasks = scanned.map(async (eg) => {
+    const appName = String(eg?.epic_appname ?? '').trim()
+    if (!appName) return
+
+    const key = appName.toLowerCase()
+    const existing = existingByAppName.get(key)
+
+    const existingSizeRaw = existing?.size
+    const initialSize = String(existingSizeRaw ?? '').trim().toUpperCase() === 'TIMEOUT'
+      ? 'TIMEOUT'
+      : (Number(existingSizeRaw) || 0)
+
+    const nativeIcon = await resolveGameIconData(eg)
+
+    const patch = {
+      title: eg?.title ?? existing?.title ?? appName,
+      platform: 'epic',
+      install_status: eg?.install_status ?? existing?.install_status ?? 'installed',
+      epic_appname: appName,
+      source_dir: eg?.source_dir ?? existing?.source_dir ?? null,
+      exe_path: eg?.exe_path ?? existing?.exe_path ?? null,
+      icon: nativeIcon ?? existing?.icon ?? null,
+      cover_url: eg?.cover_url ?? existing?.cover_url ?? null,
+      size: initialSize === 'TIMEOUT'
+        ? 'TIMEOUT'
+        : (Number.isFinite(initialSize) && initialSize >= 0 ? Number(initialSize.toFixed(2)) : 0),
+    }
+
+    let persisted = null
+    if (existing) {
+      persisted = db.updateGame(existing.id, patch)
+    } else {
+      persisted = db.addGame(patch)
+      existingByAppName.set(key, persisted)
+    }
+
+    const sourceDir = eg?.source_dir ?? existing?.source_dir ?? null
+    if (!persisted?.id || !sourceDir || !fs.existsSync(sourceDir)) return
+
+    const runSizeScan = async () => {
+      let resolvedSizeGb = 0
+      try {
+        resolvedSizeGb = await getFolderSizeWithTimeout(sourceDir)
+      } catch (error) {
+        // Timeout or I/O failure must never block library hydration.
+        console.warn(`[epic:scan] Size scan skipped for ${appName}:`, error?.message ?? error)
+        resolvedSizeGb = 'TIMEOUT'
+      }
+
+      const nextSize = String(resolvedSizeGb ?? '').trim().toUpperCase() === 'TIMEOUT'
+        ? 'TIMEOUT'
+        : (Number.isFinite(resolvedSizeGb) && resolvedSizeGb >= 0
+          ? Number(resolvedSizeGb.toFixed(2))
+          : 0)
+
+      const updated = db.updateGame(persisted.id, { size: nextSize })
+      if (updated) {
+        mainWindow?.webContents.send('game:updated', updated)
+      }
+    }
+
+    if (awaitSizeScans) {
+      await runSizeScan()
+      return
+    }
+
+    runSizeScan().catch((error) => {
+      console.warn(`[epic:scan] Deferred size update failed for ${appName}:`, error?.message ?? error)
+    })
+  })
+
+  await Promise.allSettled(tasks)
+  return scanned
+}
+
+async function loadAllLibraryGames() {
+  let allGames = []
+
+  try {
+    await syncSteamLibrary()
+  } catch (error) {
+    console.error('[library] Steam scan failed:', error)
+  }
+
+  try {
+    const customGames = db.getAllGames().filter(g => String(g?.platform ?? '').toLowerCase() === 'custom')
+    allGames = [...allGames, ...customGames]
+  } catch (error) {
+    console.error('[library] Custom game load failed:', error)
+  }
+
+  try {
+    await syncEpicLibrary({ awaitSizeScans: false })
+  } catch (error) {
+    console.error('[library] Epic scan failed:', error)
+  }
+
+  const resolvedGames = await resolveAllGamesForRenderer()
+  if (resolvedGames.length > 0) return resolvedGames
+  return allGames
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -958,8 +1246,7 @@ ipcMain.on('window:close', () => mainWindow?.close())
 
 // ── Database / Games ─────────────────────────────────────────────────────────
 ipcMain.handle('games:getAll', async () => {
-  const games = db.getAllGames()
-  return Promise.all(games.map(withResolvedCover))
+  return resolveAllGamesForRenderer()
 })
 ipcMain.handle('games:add', async (_e, game) => {
   const payload = { ...game }
@@ -967,6 +1254,10 @@ ipcMain.handle('games:add', async (_e, game) => {
 
   const parsedSize = Number.parseFloat(payload.size)
   payload.size = Number.isFinite(parsedSize) && parsedSize >= 0 ? parsedSize : 0
+  payload.isPinned = payload.isPinned === true
+  if (payload.epic_appname !== undefined && payload.epic_appname !== null) {
+    payload.epic_appname = String(payload.epic_appname).trim() || null
+  }
 
   if (!payload.exe_icon) {
     if (!isSteam && payload.exe_path) {
@@ -974,6 +1265,10 @@ ipcMain.handle('games:add', async (_e, game) => {
     } else {
       payload.exe_icon = exeIcon.getFallbackIconDataUri()
     }
+  }
+
+  if (!payload.icon) {
+    payload.icon = await resolveGameIconData(payload)
   }
 
   const created = db.addGame(payload)
@@ -985,8 +1280,17 @@ ipcMain.handle('games:update', async (_e, id, fields) => {
     const parsedSize = Number.parseFloat(patch.size)
     patch.size = Number.isFinite(parsedSize) && parsedSize >= 0 ? parsedSize : 0
   }
+  if (patch.isPinned !== undefined) {
+    patch.isPinned = patch.isPinned === true
+  }
+  if (patch.epic_appname !== undefined && patch.epic_appname !== null) {
+    patch.epic_appname = String(patch.epic_appname).trim() || null
+  }
   if (patch.exe_path && !patch.exe_icon) {
     patch.exe_icon = exeIcon.extractExeIconSync(patch.exe_path) ?? exeIcon.getFallbackIconDataUri()
+  }
+  if ((patch.exe_path || patch.source_dir) && !patch.icon) {
+    patch.icon = await resolveGameIconData(patch)
   }
   const updated = db.updateGame(id, patch)
   return withResolvedCover(updated)
@@ -1075,64 +1379,39 @@ ipcMain.handle('dialog:openFolder', async () => {
 })
 
 // ── Steam scanning ────────────────────────────────────────────────────────────
-ipcMain.handle('steam:scan', () => {
-  const scanned = steamScanner.scan()
-  const existingByAppId = new Map(
-    db.getAllGames()
-      .filter(g => g.steam_appid)
-      .map(g => [String(g.steam_appid), g])
-  )
-
-  const resolveSteamInfo = (appId, scannedGame, existingGame = null) => {
-    const isCs2 = String(appId) === '730'
-    const manifestInfo = getSteamManifestInfo(appId, { forceRefresh: isCs2 })
-
-    const parsedFromScan = Number(scannedGame?.size_on_disk)
-    const parsedFromScanGb = Number.isFinite(parsedFromScan) && parsedFromScan > 0
-      ? Number((parsedFromScan / (1024 * 1024 * 1024)).toFixed(2))
-      : 0
-
-    const manifestSizeGb = Number.isFinite(manifestInfo.sizeGb) && manifestInfo.sizeGb > 0
-      ? Number(manifestInfo.sizeGb.toFixed(2))
-      : 0
-
-    const existingSize = Number(existingGame?.size)
-    const existingSizeGb = Number.isFinite(existingSize) && existingSize > 0
-      ? Number(existingSize.toFixed(2))
-      : 0
-
-    const sizeGb = parsedFromScanGb || manifestSizeGb || existingSizeGb || 0
-    const exePath = manifestInfo.installDirPath || scannedGame?.exe_path || existingGame?.exe_path || null
-
-    return { sizeGb, exePath }
+ipcMain.handle('steam:scan', async () => {
+  try {
+    return await syncSteamLibrary()
+  } catch (error) {
+    console.error('[steam:scan] Failed:', error)
+    return []
   }
+})
 
-  for (const sg of scanned) {
-    const appId = String(sg.steam_appid)
-    const existing = existingByAppId.get(appId)
+ipcMain.handle('epic:scan', async () => {
+  try {
+    return await syncEpicLibrary({ awaitSizeScans: false })
+  } catch (error) {
+    console.error('[epic:scan] Failed:', error)
+    return []
+  }
+})
 
-    if (existing) {
-      const resolved = resolveSteamInfo(appId, sg, existing)
-      db.updateGame(existing.id, {
-        title:          sg.title,
-        exe_path:       resolved.exePath,
-        platform:       'steam',
-        cover_url:      sg.cover_url,
-        install_status: sg.install_status,
-        steam_appid:    appId,
-        // Keep Steam and custom entries aligned on the same root size key.
-        size:           resolved.sizeGb,
-      })
-      continue
+ipcMain.handle('library:loadAll', async () => {
+  try {
+    const games = await loadAllLibraryGames()
+    const categories = db.getAllCategories()
+    return {
+      games: Array.isArray(games) ? games : [],
+      categories: Array.isArray(categories) ? categories : [],
     }
-
-    const resolved = resolveSteamInfo(appId, sg)
-    const added = db.addGame({ ...sg, exe_path: resolved.exePath, platform: 'steam', steam_appid: appId, size: resolved.sizeGb })
-    existingByAppId.set(appId, added)
+  } catch (error) {
+    console.error('[library:loadAll] Failed:', error)
+    return {
+      games: await resolveAllGamesForRenderer(),
+      categories: db.getAllCategories(),
+    }
   }
-
-  // Keep existing contract (returns scanned game list) while also syncing DB.
-  return scanned
 })
 
 // ── Game launching / process tracking ────────────────────────────────────────
@@ -1141,7 +1420,7 @@ ipcMain.handle('game:isRunning', (_e, id) => gameProcess.isRunning(id))
 ipcMain.handle('game:stop', (_e, id) => gameProcess.stop(id))
 
 // ── Conflict resolution ───────────────────────────────────────────────────
-ipcMain.handle('game:resolveConflict', (_e, id, chosenExePath) => {
+ipcMain.handle('game:resolveConflict', async (_e, id, chosenExePath) => {
   const game = db.getGameById(id)
   if (!game) return { success: false, error: 'Game not found' }
   if (game.install_status !== 'pending_resolution') {
@@ -1152,8 +1431,10 @@ ipcMain.handle('game:resolveConflict', (_e, id, chosenExePath) => {
   if (!candidates.includes(chosenExePath)) {
     return { success: false, error: 'Chosen path is not a recognized conflict candidate' }
   }
+  const nativeIcon = await resolveGameIconData({ exe_path: chosenExePath })
   const updated = db.updateGame(id, {
     exe_path:       chosenExePath,
+    icon:           nativeIcon,
     exe_icon:       exeIcon.extractExeIconSync(chosenExePath) ?? exeIcon.getFallbackIconDataUri(),
     install_status: 'installed',
     conflict_exes:  [],  // clear conflict list
@@ -1192,3 +1473,137 @@ ipcMain.handle('settings:setDropZone', (_e, newPath) => {
 
 // ── Shell open ────────────────────────────────────────────────────────────────
 ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(p))
+
+// ── Desktop shortcuts (Windows) ───────────────────────────────────────────────
+function getDesktopShortcutPath(game) {
+  const name = game?.name || game?.title || 'Game'
+  const safe = String(name)
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .trim()
+    .replace(/\.+$/, '')
+    .slice(0, 100)
+  const desktopDir = app.getPath('desktop')
+  const shortcutPath = path.win32.join(desktopDir, `${safe}.lnk`)
+  return path.win32.normalize(shortcutPath)
+}
+
+function resolveShortcutIconPath(game) {
+  const normalize = (p) => path.win32.normalize(p)
+  const isLocalIconCandidate = (p) => {
+    if (typeof p !== 'string' || p.trim().length === 0) return false
+    if (!fs.existsSync(p)) return false
+    let stat
+    try { stat = fs.statSync(p) } catch { return false }
+    if (!stat.isFile()) return false
+    return /\.(ico|exe)$/i.test(p)
+  }
+
+  const platform = String(game?.platform ?? '').trim().toLowerCase()
+  const customExePath = game?.exePath ?? game?.exe_path
+
+  if (platform === 'custom' && isLocalIconCandidate(customExePath)) return normalize(customExePath)
+  if (platform === 'steam' && isLocalIconCandidate(game?.icon)) return normalize(game.icon)
+  if (platform === 'steam' && isLocalIconCandidate(game?.exe_icon)) return normalize(game.exe_icon)
+  if (isLocalIconCandidate(customExePath)) return normalize(customExePath)
+  if (isLocalIconCandidate(game?.exe_icon)) return normalize(game.exe_icon)
+  if (isLocalIconCandidate(game?.icon)) return normalize(game.icon)
+
+  const steamExe = path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Steam', 'steam.exe')
+  const epicExe = path.join(
+    process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)',
+    'Epic Games',
+    'Launcher',
+    'Portal',
+    'Binaries',
+    'Win64',
+    'EpicGamesLauncher.exe'
+  )
+  const appIconIco = path.join(app.getAppPath(), 'build', 'icon.ico')
+  const bundledIconPng = path.join(__dirname, '../assets/icon.png')
+
+  if (platform === 'steam' && fs.existsSync(steamExe)) return normalize(steamExe)
+  if (platform === 'epic' && fs.existsSync(epicExe)) return normalize(epicExe)
+  if (fs.existsSync(appIconIco)) return normalize(appIconIco)
+  if (fs.existsSync(bundledIconPng)) return normalize(bundledIconPng)
+
+  return path.win32.normalize(process.execPath)
+}
+
+function stageShortcutIconIfNeeded(iconPath) {
+  if (typeof iconPath !== 'string' || iconPath.trim().length === 0) return iconPath
+  const normalizedPath = path.win32.normalize(iconPath)
+  const isDevShortcutMode = process.env.NODE_ENV === 'development' || /node_modules/i.test(process.execPath)
+  if (!isDevShortcutMode) return normalizedPath
+  if (!/\.ico$/i.test(normalizedPath) || !fs.existsSync(normalizedPath)) return normalizedPath
+
+  try {
+    const stageDir = path.join(app.getPath('temp'), 'ugl-shortcut-icons')
+    fs.mkdirSync(stageDir, { recursive: true })
+    const stagedPath = path.join(stageDir, path.basename(normalizedPath))
+    fs.copyFileSync(normalizedPath, stagedPath)
+    return path.win32.normalize(stagedPath)
+  } catch {
+    return normalizedPath
+  }
+}
+
+ipcMain.handle('shortcut:exists', (_e, gameId) => {
+  const game = db.getGameById(Number(gameId))
+  if (!game) return false
+  return fs.existsSync(getDesktopShortcutPath(game))
+})
+
+ipcMain.handle('shortcut:create', async (_e, gameId) => {
+  if (process.platform !== 'win32') return { success: false, error: 'Windows only' }
+  const game = db.getGameById(Number(gameId))
+  if (!game) return { success: false, error: 'Game not found' }
+  const shortcutPath = path.win32.normalize(getDesktopShortcutPath(game))
+  const isDevShortcutMode = process.env.NODE_ENV === 'development' || /node_modules/i.test(process.execPath)
+  const launchArg = `--launch-game-id="${game.id}"`
+  const devMainPath = path.win32.normalize(path.join(app.getAppPath(), 'main.js'))
+  const args = isDevShortcutMode
+    ? `"${devMainPath}" ${launchArg}`
+    : launchArg
+
+  const shortcutOptions = {
+    target: path.win32.normalize(process.execPath),
+    args,
+    icon: stageShortcutIconIfNeeded(resolveShortcutIconPath(game)),
+  }
+
+  try {
+    console.log('[Shortcut Attempt] Writing to:', shortcutPath, 'with options:', JSON.stringify(shortcutOptions))
+    const success = shell.writeShortcutLink(shortcutPath, 'create', shortcutOptions)
+    console.log(`[Shortcut Result] Native engine write status: ${success}`)
+    if (success === false) {
+      console.warn('[Shortcut Failed] Native link writer returned false')
+      console.warn('[Shortcut Failed] Validation payload:', JSON.stringify({
+        shortcutPath,
+        target: shortcutOptions.target,
+        args: shortcutOptions.args,
+        icon: shortcutOptions.icon,
+      }))
+      throw new Error('Electron native shortcut writer rejected the configuration details')
+    }
+    if (!fs.existsSync(shortcutPath)) {
+      throw new Error('Shortcut creation returned success but no .lnk file was written to Desktop')
+    }
+    return { success: true }
+  } catch (error) {
+    console.error('[Shortcut Error]:', error)
+    return { success: false, error: error.message }
+  }
+})
+
+ipcMain.handle('shortcut:remove', (_e, gameId) => {
+  const game = db.getGameById(Number(gameId))
+  if (!game) return { success: false, error: 'Game not found' }
+  const lnkPath = getDesktopShortcutPath(game)
+  if (!fs.existsSync(lnkPath)) return { success: true }
+  try {
+    fs.unlinkSync(lnkPath)
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+})

@@ -4,6 +4,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 const STATIC_NAV = [
   { to: '/all',    icon: '▦',  label: 'All Games'      },
   { to: '/steam',  icon: '🔵', label: 'Steam'          },
+  { to: '/epic',   icon: '⚫', label: 'Epic Games'     },
   { to: '/custom', icon: '📁', label: 'Manually Added' },
 ]
 

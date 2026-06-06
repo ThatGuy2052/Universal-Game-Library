@@ -2,13 +2,15 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 // Whitelist of allowed IPC channels for security
 const INVOKE_CHANNELS = [
+  'library:loadAll',
   'games:getAll', 'games:add', 'games:update', 'games:delete', 'games:getById', 'games:setTags', 'games:changeAppearance', 'games:toggleLaunchSteam',
   'dialog:openExe', 'dialog:openImage', 'dialog:openFolder',
-  'steam:scan',
+  'steam:scan', 'epic:scan',
   'game:launch', 'game:isRunning', 'game:stop', 'game:resolveConflict',
   'settings:get', 'settings:set', 'settings:getDropZone', 'settings:setDropZone',
   'shell:openPath',
   'categories:getAll', 'categories:add', 'categories:update', 'categories:delete',
+  'shortcut:exists', 'shortcut:create', 'shortcut:remove',
 ]
 
 const SEND_CHANNELS = ['window:minimize', 'window:maximize', 'window:close']

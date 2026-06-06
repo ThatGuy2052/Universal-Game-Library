@@ -1,4 +1,6 @@
 export default function SearchBar({ query, onQuery, platform, onPlatform, sortBy, onSortBy, viewMode = 'grid', onViewMode }) {
+  const activePlatform = String(platform ?? 'ALL').toUpperCase()
+
   return (
     <div className="flex items-center gap-3 px-6 py-3 border-b border-brand-border bg-brand-surface shrink-0">
       {/* Search input */}
@@ -15,13 +17,14 @@ export default function SearchBar({ query, onQuery, platform, onPlatform, sortBy
 
       {/* Platform filter */}
       <select
-        value={platform}
-        onChange={e => onPlatform(e.target.value)}
+        value={activePlatform}
+        onChange={e => onPlatform(e.target.value.toLowerCase())}
         className="bg-brand-card border border-brand-border rounded-md px-3 py-1.5 text-sm text-brand-text focus:outline-none focus:border-brand-accent transition cursor-pointer"
       >
-        <option value="all">All Platforms</option>
-        <option value="steam">Steam</option>
-        <option value="custom">Custom</option>
+        <option value="ALL">All Platforms</option>
+        <option value="STEAM">Steam</option>
+        <option value="EPIC">Epic</option>
+        <option value="CUSTOM">Custom</option>
       </select>
 
       {/* Sort */}
